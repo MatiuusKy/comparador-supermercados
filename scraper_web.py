@@ -5,6 +5,7 @@ Abre carriapp.cl, intercepta las respuestas XHR a la API interna y
 extrae los productos con el mismo formato que scraper_api.group_product.
 """
 from typing import Iterator
+from urllib.parse import quote
 from playwright.sync_api import sync_playwright
 from scraper_api import group_product
 
@@ -20,25 +21,27 @@ def iter_products(query: str) -> Iterator[list[dict]]:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        try:
+            page = browser.new_page()
 
-        def on_response(response):
-            if CARRIAPP_SEARCH_PATH in response.url:
-                try:
-                    data = response.json()
-                    products = data.get("products", [])
-                    if products:
-                        captured.extend(products)
-                except Exception:
-                    pass
+            def on_response(response):
+                if CARRIAPP_SEARCH_PATH in response.url:
+                    try:
+                        data = response.json()
+                        products = data.get("products", [])
+                        if products:
+                            captured.extend(products)
+                    except Exception as exc:
+                        print(f"[scraper_web] skipping response {response.url}: {exc}")
 
-        page.on("response", on_response)
-        page.goto(
-            f"https://carriapp.cl/search/{query}",
-            wait_until="networkidle",
-            timeout=30_000,
-        )
-        browser.close()
+            page.on("response", on_response)
+            page.goto(
+                f"https://carriapp.cl/search/{quote(query)}",
+                wait_until="networkidle",
+                timeout=30_000,
+            )
+        finally:
+            browser.close()
 
     seen_ids: set = set()
     batch = []
