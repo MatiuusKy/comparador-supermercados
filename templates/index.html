@@ -690,9 +690,7 @@ function openStoreCart(storeId) {
   const urls = cart.flatMap(item =>
     item.stores.filter(s => s.store_id === storeId && s.url).map(s => s.url)
   );
-  urls.forEach((url, i) => {
-    setTimeout(() => window.open(url, '_blank'), i * 150);
-  });
+  urls.forEach(url => window.open(url, '_blank'));
 }
 </script>
 
