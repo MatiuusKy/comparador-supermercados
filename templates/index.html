@@ -298,6 +298,15 @@ const state = {
   eventSource: null,
 };
 
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ─── Carrito (localStorage) ──────────────────────────────────────────────────
 function loadCart() {
   try {
@@ -378,6 +387,7 @@ function startSearch() {
       appendProductRow(product, storeMap);
     });
     setStatus(`${state.products.size} productos encontrados…`);
+    refreshPriceHighlights();
   });
 
   es.addEventListener('done', () => {
@@ -438,7 +448,12 @@ function appendProductRow(product, storeMap) {
   const imgSrc = firstStore?.image || '';
   const tdImg = document.createElement('td');
   if (imgSrc) {
-    tdImg.innerHTML = `<img class="product-img" src="${imgSrc}" alt="" loading="lazy">`;
+    const img = document.createElement('img');
+    img.className = 'product-img';
+    img.src = imgSrc;
+    img.alt = '';
+    img.loading = 'lazy';
+    tdImg.appendChild(img);
   }
   tr.appendChild(tdImg);
 
@@ -460,7 +475,7 @@ function appendProductRow(product, storeMap) {
     td.dataset.storeId = storeId;
     const s = storeMap.get(storeId);
     if (s && s.available > 0) {
-      const displayPrice = s.best_promo_price !== null ? s.best_promo_price : s.price;
+      const displayPrice = s.best_promo_price ?? s.price;
       td.textContent = formatPrice(displayPrice);
       td.dataset.price = displayPrice;
     } else {
@@ -523,7 +538,7 @@ function addToCart(productId) {
         store_id: s.store_id,
         store_name: s.store_name,
         store_url: s.store_url,
-        price: s.best_promo_price !== null ? s.best_promo_price : s.price,
+        price: s.best_promo_price ?? s.price,
         url: s.url,
       })),
     });
@@ -562,16 +577,40 @@ function renderCart() {
 
   clearBtn.style.display = 'block';
 
-  itemsEl.innerHTML = cart.map(item => `
-    <div class="cart-item">
-      <span class="cart-item-name" title="${item.name}">${item.name}</span>
-      <div class="cart-item-qty">
-        <button class="qty-btn" onclick="changeQty(${item.product_id}, -1)">−</button>
-        <span>${item.qty}</span>
-        <button class="qty-btn" onclick="changeQty(${item.product_id}, 1)">+</button>
-      </div>
-    </div>
-  `).join('');
+  itemsEl.innerHTML = '';
+  cart.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'cart-item';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'cart-item-name';
+    nameSpan.title = item.name;
+    nameSpan.textContent = item.name;
+
+    const qtyDiv = document.createElement('div');
+    qtyDiv.className = 'cart-item-qty';
+
+    const minusBtn = document.createElement('button');
+    minusBtn.className = 'qty-btn';
+    minusBtn.textContent = '−';
+    minusBtn.onclick = () => changeQty(item.product_id, -1);
+
+    const qtySpan = document.createElement('span');
+    qtySpan.textContent = item.qty;
+
+    const plusBtn = document.createElement('button');
+    plusBtn.className = 'qty-btn';
+    plusBtn.textContent = '+';
+    plusBtn.onclick = () => changeQty(item.product_id, 1);
+
+    qtyDiv.appendChild(minusBtn);
+    qtyDiv.appendChild(qtySpan);
+    qtyDiv.appendChild(plusBtn);
+
+    div.appendChild(nameSpan);
+    div.appendChild(qtyDiv);
+    itemsEl.appendChild(div);
+  });
 
   const storeTotals = new Map();
   cart.forEach(item => {
@@ -602,26 +641,48 @@ function renderCart() {
   const minTotal = totalsArr[0].total;
   const maxTotal = totalsArr[totalsArr.length - 1].total;
 
-  totalsEl.innerHTML = '<hr style="margin:0.5rem 0"><strong style="font-size:0.85rem">Total por supermercado</strong>' +
-    totalsArr.map(t => {
-      const isCheapest = t.total === minTotal;
-      const savings = maxTotal > 0 && !isCheapest
-        ? Math.round((1 - t.total / maxTotal) * 100)
-        : null;
-      const savingsBadge = isCheapest
-        ? '<span class="savings-badge">Más barato</span>'
-        : (savings !== null ? `<span class="savings-badge">-${savings}%</span>` : '');
-      const hasUrls = t.urls.length > 0;
-      return `
-        <div class="cart-store-row${isCheapest ? ' cheapest' : ''}">
-          <span>${t.store_name}</span>
-          <span>${formatPrice(t.total)} ${savingsBadge}</span>
-        </div>
-        <button class="buy-btn" onclick="openStoreCart(${t.store_id})"
-          ${!hasUrls ? 'disabled' : ''}>
-          Ir a comprar en ${t.store_name}
-        </button>`;
-    }).join('');
+  totalsEl.innerHTML = '';
+  const hr = document.createElement('hr');
+  hr.style.margin = '0.5rem 0';
+  totalsEl.appendChild(hr);
+  const totalLabel = document.createElement('strong');
+  totalLabel.style.fontSize = '0.85rem';
+  totalLabel.textContent = 'Total por supermercado';
+  totalsEl.appendChild(totalLabel);
+
+  totalsArr.forEach(t => {
+    const isCheapest = t.total === minTotal && minTotal < maxTotal;
+    const savings = maxTotal > 0 && !isCheapest
+      ? Math.round((1 - t.total / maxTotal) * 100)
+      : null;
+
+    const storeRow = document.createElement('div');
+    storeRow.className = 'cart-store-row' + (isCheapest ? ' cheapest' : '');
+
+    const storeNameSpan = document.createElement('span');
+    storeNameSpan.textContent = t.store_name;
+
+    const priceSpan = document.createElement('span');
+    priceSpan.textContent = formatPrice(t.total) + ' ';
+
+    if (isCheapest || savings !== null) {
+      const badge = document.createElement('span');
+      badge.className = 'savings-badge';
+      badge.textContent = isCheapest ? 'Más barato' : `-${savings}%`;
+      priceSpan.appendChild(badge);
+    }
+
+    storeRow.appendChild(storeNameSpan);
+    storeRow.appendChild(priceSpan);
+    totalsEl.appendChild(storeRow);
+
+    const buyBtn = document.createElement('button');
+    buyBtn.className = 'buy-btn';
+    buyBtn.textContent = `Ir a comprar en ${t.store_name}`;
+    buyBtn.disabled = !t.urls.length;
+    buyBtn.onclick = () => openStoreCart(t.store_id);
+    totalsEl.appendChild(buyBtn);
+  });
 }
 
 function openStoreCart(storeId) {
