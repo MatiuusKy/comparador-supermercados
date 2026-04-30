@@ -112,3 +112,15 @@ def test_get_categories_returns_list(monkeypatch):
     result = scraper_api.get_categories()
     assert {"slug": "despensa", "name": "Despensa", "parent": None} in result
     assert {"slug": "arroz_legumbres", "name": "Arroz y Legumbres", "parent": "despensa"} in result
+
+
+def test_iter_products_encodes_query(monkeypatch):
+    called_urls = []
+    def mock_get(url):
+        called_urls.append(url)
+        return {"products": [], "next_page": None}
+    monkeypatch.setattr(scraper_api, "get", mock_get)
+    list(scraper_api.iter_products("papel higiénico"))
+    assert called_urls, "get() should have been called"
+    assert " " not in called_urls[0], "URL must not contain spaces"
+    assert "é" not in called_urls[0], "URL must not contain raw accented chars"

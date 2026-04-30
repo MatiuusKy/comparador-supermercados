@@ -6,6 +6,7 @@ import json
 import time
 import uuid
 from typing import Iterator, Union, Dict, List
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -89,7 +90,7 @@ def iter_products(query: str, location: int = 1) -> Iterator[List[dict]]:
     Genera batches de productos agrupados, página a página.
     Raises HTTPError / URLError si la API falla (para activar fallback).
     """
-    url = f"{BASE}/search/{query}?sort=relevance&location={location}"
+    url = f"{BASE}/search/{quote(query)}?sort=relevance&location={location}"
     seen_ids: set = set()
 
     while url:
@@ -106,7 +107,7 @@ def iter_products(query: str, location: int = 1) -> Iterator[List[dict]]:
 
         next_page = data.get("next_page")
         if next_page:
-            url = f"{BASE}/search/{query}?sort=relevance&location={location}&next_page={next_page}"
+            url = f"{BASE}/search/{quote(query)}?sort=relevance&location={location}&next_page={next_page}"
             time.sleep(0.3)
         else:
             url = None
