@@ -1,2 +1,639 @@
 <!DOCTYPE html>
-<html><body><h1>Comparador</h1></body></html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comparador de Supermercados</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a6b3a;
+      color: white;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    header h1 { font-size: 1.3rem; font-weight: 600; }
+
+    .main { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+
+    /* Search bar */
+    .search-bar {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .search-bar input {
+      flex: 1;
+      padding: 0.65rem 1rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 1rem;
+      outline: none;
+    }
+
+    .search-bar input:focus { border-color: #1a6b3a; }
+
+    .search-bar button {
+      padding: 0.65rem 1.5rem;
+      background: #1a6b3a;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    .search-bar button:hover { background: #155530; }
+    .search-bar button:disabled { background: #999; cursor: not-allowed; }
+
+    /* Status bar */
+    #status {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 0.75rem;
+      min-height: 1.2em;
+    }
+
+    #status.error { color: #c0392b; }
+
+    /* Layout: tabla + carrito lado a lado */
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    /* Results table */
+    .table-wrapper {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      overflow-x: auto;
+    }
+
+    #filter-input {
+      width: 100%;
+      padding: 0.5rem 1rem;
+      border: none;
+      border-bottom: 1px solid #eee;
+      font-size: 0.9rem;
+      outline: none;
+      border-radius: 8px 8px 0 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    thead th {
+      background: #f9f9f9;
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 2px solid #eee;
+      white-space: nowrap;
+    }
+
+    tbody tr:hover { background: #fafafa; }
+
+    tbody td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: middle;
+    }
+
+    td.price { text-align: right; white-space: nowrap; }
+    td.price.best { color: #1a6b3a; font-weight: 700; }
+    td.price.empty { color: #bbb; }
+
+    .product-img {
+      width: 40px;
+      height: 40px;
+      object-fit: contain;
+      border-radius: 4px;
+    }
+
+    .add-btn {
+      background: #1a6b3a;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 0.25rem 0.6rem;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+    }
+
+    .add-btn:hover { background: #155530; }
+
+    /* Cart panel */
+    .cart-panel {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      padding: 1rem;
+      position: sticky;
+      top: 1rem;
+    }
+
+    .cart-panel h2 { font-size: 1rem; margin-bottom: 0.75rem; }
+
+    .cart-empty { color: #999; font-size: 0.9rem; text-align: center; padding: 1rem 0; }
+
+    .cart-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.4rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.85rem;
+      gap: 0.5rem;
+    }
+
+    .cart-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .cart-item-qty {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .qty-btn {
+      background: #eee;
+      border: none;
+      border-radius: 3px;
+      padding: 0 0.4rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .qty-btn:hover { background: #ddd; }
+
+    .cart-totals { margin-top: 0.75rem; }
+
+    .cart-store-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.4rem 0;
+      font-size: 0.9rem;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .cart-store-row.cheapest { color: #1a6b3a; font-weight: 700; }
+
+    .savings-badge {
+      background: #e8f5e9;
+      color: #1a6b3a;
+      font-size: 0.75rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 10px;
+    }
+
+    .buy-btn {
+      display: block;
+      width: 100%;
+      margin-top: 0.4rem;
+      padding: 0.35rem;
+      background: #1a6b3a;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .buy-btn:hover { background: #155530; }
+    .buy-btn:disabled { background: #ccc; cursor: not-allowed; }
+
+    .clear-btn {
+      display: block;
+      width: 100%;
+      margin-top: 0.75rem;
+      padding: 0.4rem;
+      background: #fff;
+      color: #c0392b;
+      border: 1px solid #c0392b;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    .clear-btn:hover { background: #ffeaea; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.5rem">🛒</span>
+  <h1>Comparador de Supermercados</h1>
+</header>
+
+<div class="main">
+
+  <!-- Buscador -->
+  <div class="search-bar">
+    <input id="search-input" type="text" placeholder="Ej: arroz, leche, detergente…" autocomplete="off" list="categories-list">
+    <datalist id="categories-list"></datalist>
+    <button id="search-btn" onclick="startSearch()">Buscar</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="layout">
+
+    <!-- Tabla comparativa -->
+    <div class="table-wrapper">
+      <input id="filter-input" type="text" placeholder="Filtrar resultados…" oninput="filterTable()" style="display:none">
+      <table id="results-table">
+        <thead id="table-head">
+          <tr>
+            <th></th>
+            <th>Producto</th>
+            <th>Marca</th>
+            <th>Unidad</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Carrito -->
+    <div class="cart-panel">
+      <h2>🛒 Carrito</h2>
+      <div id="cart-items"></div>
+      <div id="cart-totals" class="cart-totals"></div>
+      <button class="clear-btn" onclick="clearCart()" id="clear-btn" style="display:none">Vaciar carrito</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ─── Estado global ──────────────────────────────────────────────────────────
+const state = {
+  stores: new Map(),       // store_id(int) → {store_name, store_url, store_logo}
+  products: new Map(),     // product_id → {product_id, slug, brand, unit, storeMap: Map}
+  eventSource: null,
+};
+
+// ─── Carrito (localStorage) ──────────────────────────────────────────────────
+function loadCart() {
+  try {
+    return JSON.parse(localStorage.getItem('supermarket_cart') || '[]');
+  } catch { return []; }
+}
+
+function saveCart(cart) {
+  localStorage.setItem('supermarket_cart', JSON.stringify(cart));
+}
+
+// ─── Inicialización ──────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const res = await fetch('/api/categories');
+    const cats = await res.json();
+    const dl = document.getElementById('categories-list');
+    cats.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.slug;
+      opt.label = c.name + (c.parent ? ` (${c.parent})` : '');
+      dl.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn('No se pudieron cargar categorías:', e);
+  }
+  renderCart();
+  document.getElementById('search-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') startSearch();
+  });
+}
+
+window.addEventListener('DOMContentLoaded', init);
+
+// ─── Búsqueda + SSE ──────────────────────────────────────────────────────────
+function startSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) return;
+
+  if (state.eventSource) state.eventSource.close();
+  state.stores.clear();
+  state.products.clear();
+  document.getElementById('table-body').innerHTML = '';
+  document.getElementById('table-head').innerHTML = `
+    <tr>
+      <th></th>
+      <th>Producto</th>
+      <th>Marca</th>
+      <th>Unidad</th>
+      <th></th>
+    </tr>`;
+  document.getElementById('filter-input').style.display = 'none';
+  setStatus(`Buscando "${q}"…`);
+
+  const btn = document.getElementById('search-btn');
+  btn.disabled = true;
+  btn.textContent = 'Buscando…';
+
+  const es = new EventSource(`/api/search/stream?q=${encodeURIComponent(q)}`);
+  state.eventSource = es;
+
+  es.addEventListener('products', e => {
+    const batch = JSON.parse(e.data);
+    batch.forEach(product => {
+      product.stores.forEach(s => {
+        if (!state.stores.has(s.store_id)) {
+          state.stores.set(s.store_id, {
+            store_name: s.store_name,
+            store_url: s.store_url,
+            store_logo: s.store_logo,
+          });
+          addStoreColumn(s.store_id, s.store_name);
+        }
+      });
+
+      const storeMap = new Map(product.stores.map(s => [s.store_id, s]));
+      state.products.set(product.product_id, { ...product, storeMap });
+      appendProductRow(product, storeMap);
+    });
+    setStatus(`${state.products.size} productos encontrados…`);
+  });
+
+  es.addEventListener('done', () => {
+    es.close();
+    setStatus(`${state.products.size} productos encontrados.`);
+    btn.disabled = false;
+    btn.textContent = 'Buscar';
+    if (state.products.size > 0) {
+      document.getElementById('filter-input').style.display = 'block';
+      refreshPriceHighlights();
+    }
+  });
+
+  es.addEventListener('error', e => {
+    if (e.data) {
+      const msg = JSON.parse(e.data).message;
+      setStatus(`Error: ${msg}`, true);
+    } else {
+      setStatus('Error de conexión.', true);
+    }
+    es.close();
+    btn.disabled = false;
+    btn.textContent = 'Buscar';
+  });
+}
+
+function setStatus(msg, isError = false) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isError ? 'error' : '';
+}
+
+// ─── Tabla ───────────────────────────────────────────────────────────────────
+function addStoreColumn(storeId, storeName) {
+  const thead = document.getElementById('table-head');
+  const row = thead.querySelector('tr');
+
+  const th = document.createElement('th');
+  th.dataset.storeId = storeId;
+  th.textContent = storeName;
+  row.insertBefore(th, row.lastElementChild);
+
+  document.querySelectorAll('#table-body tr').forEach(tr => {
+    const td = document.createElement('td');
+    td.className = 'price empty';
+    td.dataset.storeId = storeId;
+    td.textContent = '—';
+    tr.insertBefore(td, tr.lastElementChild);
+  });
+}
+
+function appendProductRow(product, storeMap) {
+  const tbody = document.getElementById('table-body');
+  const tr = document.createElement('tr');
+  tr.dataset.productId = product.product_id;
+
+  const firstStore = product.stores[0];
+  const imgSrc = firstStore?.image || '';
+  const tdImg = document.createElement('td');
+  if (imgSrc) {
+    tdImg.innerHTML = `<img class="product-img" src="${imgSrc}" alt="" loading="lazy">`;
+  }
+  tr.appendChild(tdImg);
+
+  const tdName = document.createElement('td');
+  tdName.textContent = firstStore?.product_name || product.slug;
+  tr.appendChild(tdName);
+
+  const tdBrand = document.createElement('td');
+  tdBrand.textContent = product.brand;
+  tr.appendChild(tdBrand);
+
+  const tdUnit = document.createElement('td');
+  tdUnit.textContent = product.unit;
+  tr.appendChild(tdUnit);
+
+  state.stores.forEach((_, storeId) => {
+    const td = document.createElement('td');
+    td.className = 'price';
+    td.dataset.storeId = storeId;
+    const s = storeMap.get(storeId);
+    if (s && s.available > 0) {
+      const displayPrice = s.best_promo_price !== null ? s.best_promo_price : s.price;
+      td.textContent = formatPrice(displayPrice);
+      td.dataset.price = displayPrice;
+    } else {
+      td.textContent = '—';
+      td.classList.add('empty');
+    }
+    tr.appendChild(td);
+  });
+
+  const tdAdd = document.createElement('td');
+  tdAdd.innerHTML = `<button class="add-btn" onclick="addToCart(${product.product_id})" title="Agregar al carrito">+</button>`;
+  tr.appendChild(tdAdd);
+
+  tbody.appendChild(tr);
+}
+
+function refreshPriceHighlights() {
+  document.querySelectorAll('#table-body tr').forEach(tr => {
+    const cells = [...tr.querySelectorAll('td.price:not(.empty)')];
+    if (cells.length === 0) return;
+    const prices = cells.map(td => parseFloat(td.dataset.price)).filter(p => !isNaN(p));
+    if (prices.length === 0) return;
+    const minPrice = Math.min(...prices);
+    cells.forEach(td => {
+      td.classList.toggle('best', parseFloat(td.dataset.price) === minPrice);
+    });
+  });
+}
+
+function filterTable() {
+  const q = document.getElementById('filter-input').value.toLowerCase();
+  document.querySelectorAll('#table-body tr').forEach(tr => {
+    const text = tr.textContent.toLowerCase();
+    tr.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+
+function formatPrice(n) {
+  return '$' + Math.round(n).toLocaleString('es-CL');
+}
+
+// ─── Carrito ─────────────────────────────────────────────────────────────────
+function addToCart(productId) {
+  const product = state.products.get(productId);
+  if (!product) return;
+
+  const cart = loadCart();
+  const existing = cart.find(item => item.product_id === productId);
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    cart.push({
+      product_id: product.product_id,
+      slug: product.slug,
+      brand: product.brand,
+      unit: product.unit,
+      name: product.stores[0]?.product_name || product.slug,
+      qty: 1,
+      stores: product.stores.map(s => ({
+        store_id: s.store_id,
+        store_name: s.store_name,
+        store_url: s.store_url,
+        price: s.best_promo_price !== null ? s.best_promo_price : s.price,
+        url: s.url,
+      })),
+    });
+  }
+  saveCart(cart);
+  renderCart();
+}
+
+function changeQty(productId, delta) {
+  const cart = loadCart();
+  const item = cart.find(i => i.product_id === productId);
+  if (!item) return;
+  item.qty = Math.max(0, item.qty + delta);
+  const newCart = item.qty === 0 ? cart.filter(i => i.product_id !== productId) : cart;
+  saveCart(newCart);
+  renderCart();
+}
+
+function clearCart() {
+  saveCart([]);
+  renderCart();
+}
+
+function renderCart() {
+  const cart = loadCart();
+  const itemsEl = document.getElementById('cart-items');
+  const totalsEl = document.getElementById('cart-totals');
+  const clearBtn = document.getElementById('clear-btn');
+
+  if (cart.length === 0) {
+    itemsEl.innerHTML = '<div class="cart-empty">El carrito está vacío</div>';
+    totalsEl.innerHTML = '';
+    clearBtn.style.display = 'none';
+    return;
+  }
+
+  clearBtn.style.display = 'block';
+
+  itemsEl.innerHTML = cart.map(item => `
+    <div class="cart-item">
+      <span class="cart-item-name" title="${item.name}">${item.name}</span>
+      <div class="cart-item-qty">
+        <button class="qty-btn" onclick="changeQty(${item.product_id}, -1)">−</button>
+        <span>${item.qty}</span>
+        <button class="qty-btn" onclick="changeQty(${item.product_id}, 1)">+</button>
+      </div>
+    </div>
+  `).join('');
+
+  const storeTotals = new Map();
+  cart.forEach(item => {
+    item.stores.forEach(s => {
+      if (!storeTotals.has(s.store_id)) {
+        storeTotals.set(s.store_id, {
+          store_name: s.store_name,
+          store_url: s.store_url,
+          total: 0,
+          urls: [],
+        });
+      }
+      const entry = storeTotals.get(s.store_id);
+      entry.total += s.price * item.qty;
+      if (s.url) entry.urls.push(s.url);
+    });
+  });
+
+  if (storeTotals.size === 0) {
+    totalsEl.innerHTML = '';
+    return;
+  }
+
+  const totalsArr = [...storeTotals.entries()]
+    .map(([sid, v]) => ({ store_id: sid, ...v }))
+    .sort((a, b) => a.total - b.total);
+
+  const minTotal = totalsArr[0].total;
+  const maxTotal = totalsArr[totalsArr.length - 1].total;
+
+  totalsEl.innerHTML = '<hr style="margin:0.5rem 0"><strong style="font-size:0.85rem">Total por supermercado</strong>' +
+    totalsArr.map(t => {
+      const isCheapest = t.total === minTotal;
+      const savings = maxTotal > 0 && !isCheapest
+        ? Math.round((1 - t.total / maxTotal) * 100)
+        : null;
+      const savingsBadge = isCheapest
+        ? '<span class="savings-badge">Más barato</span>'
+        : (savings !== null ? `<span class="savings-badge">-${savings}%</span>` : '');
+      const hasUrls = t.urls.length > 0;
+      return `
+        <div class="cart-store-row${isCheapest ? ' cheapest' : ''}">
+          <span>${t.store_name}</span>
+          <span>${formatPrice(t.total)} ${savingsBadge}</span>
+        </div>
+        <button class="buy-btn" onclick="openStoreCart(${t.store_id})"
+          ${!hasUrls ? 'disabled' : ''}>
+          Ir a comprar en ${t.store_name}
+        </button>`;
+    }).join('');
+}
+
+function openStoreCart(storeId) {
+  const cart = loadCart();
+  const urls = cart.flatMap(item =>
+    item.stores.filter(s => s.store_id === storeId && s.url).map(s => s.url)
+  );
+  urls.forEach((url, i) => {
+    setTimeout(() => window.open(url, '_blank'), i * 150);
+  });
+}
+</script>
+
+</body>
+</html>
