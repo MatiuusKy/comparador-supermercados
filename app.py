@@ -7,6 +7,7 @@ Endpoints:
   GET /api/search/stream?q=...  → SSE stream de productos
 """
 import json
+from contextlib import asynccontextmanager
 from urllib.error import HTTPError, URLError
 
 from fastapi import FastAPI, Request
@@ -16,16 +17,12 @@ from fastapi.templating import Jinja2Templates
 import scraper_api
 import scraper_web
 
-app = FastAPI()
-templates = Jinja2Templates(directory="templates")
-
-# Cache de datos estáticos (se cargan una vez al arrancar)
 _stores: dict = {}
 _categories: list = []
 
 
-@app.on_event("startup")
-async def load_static_data():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global _stores, _categories
     try:
         _stores = scraper_api.get_stores()
@@ -42,11 +39,16 @@ async def load_static_data():
     except Exception as e:
         print(f"[WARN] No se pudieron cargar categorías: {e}")
         _categories = []
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+templates = Jinja2Templates(directory="templates")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/api/categories")
@@ -62,7 +64,7 @@ async def search_stream(q: str):
                 enriched = _enrich_batch(batch)
                 data = json.dumps(enriched, ensure_ascii=False)
                 yield f"event: products\ndata: {data}\n\n"
-        except (HTTPError, URLError):
+        except (HTTPError, URLError, OSError):
             # Fallback a Playwright
             try:
                 for batch in scraper_web.iter_products(q):
@@ -85,12 +87,19 @@ async def search_stream(q: str):
     )
 
 
-def _enrich_batch(batch: list) -> list:
-    """Agrega store_name, store_url, store_logo a cada store usando el caché _stores."""
+def _enrich_batch(batch: list[dict]) -> list[dict]:
+    """Agrega store_name, store_url, store_logo a cada store usando el caché _stores.
+    Returns a new list — does not mutate the input."""
+    result = []
     for product in batch:
+        enriched_stores = []
         for store in product["stores"]:
             sid = store["store_id"]
-            store["store_name"] = _stores.get(sid, {}).get("name", f"Store {sid}")
-            store["store_url"] = _stores.get(sid, {}).get("url", "")
-            store["store_logo"] = _stores.get(sid, {}).get("logo", "")
-    return batch
+            enriched_stores.append({
+                **store,
+                "store_name": _stores.get(sid, {}).get("name", f"Store {sid}"),
+                "store_url": _stores.get(sid, {}).get("url", ""),
+                "store_logo": _stores.get(sid, {}).get("logo", ""),
+            })
+        result.append({**product, "stores": enriched_stores})
+    return result

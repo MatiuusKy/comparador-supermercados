@@ -2,7 +2,7 @@
 import json
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 MOCK_STORES = {
@@ -40,6 +40,7 @@ MOCK_BATCH = [
 
 @pytest.fixture
 def client():
+    # Import app inside patch context so lifespan startup uses mocked functions
     with patch("scraper_api.get_stores", return_value=MOCK_STORES), \
          patch("scraper_api.get_categories", return_value=MOCK_CATEGORIES):
         from app import app
@@ -72,6 +73,8 @@ def test_search_stream_returns_sse(client):
             body = response.read().decode()
             assert "event: products" in body
             assert "event: done" in body
+            # Verify enrichment: store_name must be present in SSE payload
+            assert "store_name" in body
 
 
 def test_search_stream_fallback_on_api_error(client):
@@ -79,7 +82,7 @@ def test_search_stream_fallback_on_api_error(client):
 
     def failing_api(query, **kwargs):
         raise URLError("connection refused")
-        yield  # make it a generator
+        yield  # noqa: unreachable — makes this a generator for mock compatibility
 
     def mock_fallback(query):
         yield MOCK_BATCH
@@ -89,6 +92,7 @@ def test_search_stream_fallback_on_api_error(client):
         with client.stream("GET", "/api/search/stream?q=arroz") as response:
             body = response.read().decode()
             assert "event: products" in body
+            assert "event: done" in body
 
 
 def test_search_stream_error_event_when_both_fail(client):
@@ -96,7 +100,7 @@ def test_search_stream_error_event_when_both_fail(client):
 
     def failing(query, **kwargs):
         raise URLError("fail")
-        yield
+        yield  # noqa: unreachable — makes this a generator for mock compatibility
 
     with patch("scraper_api.iter_products", side_effect=failing), \
          patch("scraper_web.iter_products", side_effect=failing):
