@@ -240,6 +240,64 @@
     }
 
     .clear-btn:hover { background: #ffeaea; }
+
+    /* Sort bar */
+    .sort-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 0.75rem;
+      background: white;
+      border-radius: 8px 8px 0 0;
+      border-bottom: 1px solid #eee;
+      flex-wrap: wrap;
+    }
+    .sort-label { font-size: 0.8rem; color: #888; margin-right: 0.25rem; }
+    .sort-btn {
+      padding: 0.2rem 0.6rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: white;
+      font-size: 0.8rem;
+      cursor: pointer;
+      color: #444;
+    }
+    .sort-btn:hover { background: #f5f5f5; }
+    .sort-btn.active { background: #1a6b3a; color: white; border-color: #1a6b3a; }
+
+    /* Secciones por supermercado en carrito */
+    .store-section {
+      margin-top: 0.6rem;
+      border: 1px solid #eee;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .store-section.cheapest { border-color: #1a6b3a; }
+    .store-section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.4rem 0.6rem;
+      background: #f9f9f9;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .store-section.cheapest .store-section-header { background: #e8f5e9; color: #1a6b3a; }
+    .store-section-avail { font-size: 0.73rem; font-weight: 400; color: #888; margin-left: 0.3rem; }
+    .store-section.cheapest .store-section-avail { color: #2e7d50; }
+    .store-items { padding: 0.25rem 0.6rem; }
+    .store-item-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.78rem;
+      color: #555;
+      padding: 0.18rem 0;
+      border-bottom: 1px solid #f5f5f5;
+    }
+    .store-item-row:last-child { border-bottom: none; }
+    .store-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .store-item-price { white-space: nowrap; margin-left: 0.5rem; font-variant-numeric: tabular-nums; }
+    .store-item-unavail { font-size: 0.78rem; color: #bbb; padding: 0.18rem 0; }
   </style>
 </head>
 <body>
@@ -263,6 +321,14 @@
   <div class="layout">
 
     <!-- Tabla comparativa -->
+    <div>
+    <div id="sort-bar" class="sort-bar" style="display:none">
+      <span class="sort-label">Ordenar:</span>
+      <button class="sort-btn active" data-sort="default" onclick="sortTable('default')">Relevancia</button>
+      <button class="sort-btn" data-sort="price_asc" onclick="sortTable('price_asc')">Precio ↑</button>
+      <button class="sort-btn" data-sort="price_desc" onclick="sortTable('price_desc')">Precio ↓</button>
+      <button class="sort-btn" data-sort="name_asc" onclick="sortTable('name_asc')">Nombre A-Z</button>
+    </div>
     <div class="table-wrapper">
       <input id="filter-input" type="text" placeholder="Filtrar resultados…" oninput="filterTable()" style="display:none">
       <table id="results-table">
@@ -277,6 +343,7 @@
         </thead>
         <tbody id="table-body"></tbody>
       </table>
+    </div>
     </div>
 
     <!-- Carrito -->
@@ -296,6 +363,7 @@ const state = {
   stores: new Map(),       // store_id(int) → {store_name, store_url, store_logo}
   products: new Map(),     // product_id → {product_id, slug, brand, unit, storeMap: Map}
   eventSource: null,
+  defaultOrder: [],        // product_ids en orden original de la API
 };
 
 function escapeHtml(str) {
@@ -349,6 +417,7 @@ function startSearch() {
   if (state.eventSource) state.eventSource.close();
   state.stores.clear();
   state.products.clear();
+  state.defaultOrder = [];
   document.getElementById('table-body').innerHTML = '';
   document.getElementById('table-head').innerHTML = `
     <tr>
@@ -359,6 +428,11 @@ function startSearch() {
       <th></th>
     </tr>`;
   document.getElementById('filter-input').style.display = 'none';
+  const sortBar = document.getElementById('sort-bar');
+  sortBar.style.display = 'none';
+  sortBar.querySelectorAll('.sort-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.sort === 'default');
+  });
   setStatus(`Buscando "${q}"…`);
 
   const btn = document.getElementById('search-btn');
@@ -371,6 +445,7 @@ function startSearch() {
   es.addEventListener('products', e => {
     const batch = JSON.parse(e.data);
     batch.forEach(product => {
+      state.defaultOrder.push(product.product_id);
       product.stores.forEach(s => {
         if (!state.stores.has(s.store_id)) {
           state.stores.set(s.store_id, {
@@ -397,6 +472,7 @@ function startSearch() {
     btn.textContent = 'Buscar';
     if (state.products.size > 0) {
       document.getElementById('filter-input').style.display = 'block';
+      document.getElementById('sort-bar').style.display = 'flex';
       refreshPriceHighlights();
     }
   });
@@ -453,6 +529,8 @@ function appendProductRow(product, storeMap) {
     img.src = imgSrc;
     img.alt = '';
     img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.onerror = () => { img.style.display = 'none'; };
     tdImg.appendChild(img);
   }
   tr.appendChild(tdImg);
@@ -517,6 +595,41 @@ function formatPrice(n) {
   return '$' + Math.round(n).toLocaleString('es-CL');
 }
 
+// ─── Ordenamiento ────────────────────────────────────────────────────────────
+function getMinPrice(tr) {
+  const cells = [...tr.querySelectorAll('td.price:not(.empty)')];
+  const prices = cells.map(td => parseFloat(td.dataset.price)).filter(p => !isNaN(p));
+  return prices.length ? Math.min(...prices) : Infinity;
+}
+
+function sortTable(criterion) {
+  document.querySelectorAll('.sort-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.sort === criterion);
+  });
+  const tbody = document.getElementById('table-body');
+  const rows = [...tbody.querySelectorAll('tr')];
+  if (criterion === 'default') {
+    state.defaultOrder.forEach(id => {
+      const row = tbody.querySelector(`tr[data-product-id="${id}"]`);
+      if (row) tbody.appendChild(row);
+    });
+    return;
+  }
+  rows.sort((a, b) => {
+    if (criterion === 'price_asc' || criterion === 'price_desc') {
+      const diff = getMinPrice(a) - getMinPrice(b);
+      return criterion === 'price_asc' ? diff : -diff;
+    }
+    if (criterion === 'name_asc') {
+      const nameA = a.querySelectorAll('td')[1]?.textContent || '';
+      const nameB = b.querySelectorAll('td')[1]?.textContent || '';
+      return nameA.localeCompare(nameB, 'es');
+    }
+    return 0;
+  });
+  rows.forEach(row => tbody.appendChild(row));
+}
+
 // ─── Carrito ─────────────────────────────────────────────────────────────────
 function addToCart(productId) {
   const product = state.products.get(productId);
@@ -577,6 +690,7 @@ function renderCart() {
 
   clearBtn.style.display = 'block';
 
+  // Lista unificada con controles de cantidad
   itemsEl.innerHTML = '';
   cart.forEach(item => {
     const div = document.createElement('div');
@@ -606,12 +720,12 @@ function renderCart() {
     qtyDiv.appendChild(minusBtn);
     qtyDiv.appendChild(qtySpan);
     qtyDiv.appendChild(plusBtn);
-
     div.appendChild(nameSpan);
     div.appendChild(qtyDiv);
     itemsEl.appendChild(div);
   });
 
+  // Agrupar por supermercado con ítems detallados
   const storeTotals = new Map();
   cart.forEach(item => {
     item.stores.forEach(s => {
@@ -621,11 +735,14 @@ function renderCart() {
           store_url: s.store_url,
           total: 0,
           urls: [],
+          items: [],
         });
       }
       const entry = storeTotals.get(s.store_id);
-      entry.total += s.price * item.qty;
+      const lineTotal = s.price * item.qty;
+      entry.total += lineTotal;
       if (s.url) entry.urls.push(s.url);
+      entry.items.push({ name: item.name, qty: item.qty, price: s.price, lineTotal });
     });
   });
 
@@ -640,15 +757,16 @@ function renderCart() {
 
   const minTotal = totalsArr[0].total;
   const maxTotal = totalsArr[totalsArr.length - 1].total;
+  const totalCartItems = cart.length;
 
   totalsEl.innerHTML = '';
   const hr = document.createElement('hr');
   hr.style.margin = '0.5rem 0';
   totalsEl.appendChild(hr);
-  const totalLabel = document.createElement('strong');
-  totalLabel.style.fontSize = '0.85rem';
-  totalLabel.textContent = 'Total por supermercado';
-  totalsEl.appendChild(totalLabel);
+  const label = document.createElement('strong');
+  label.style.fontSize = '0.82rem';
+  label.textContent = 'Por supermercado';
+  totalsEl.appendChild(label);
 
   totalsArr.forEach(t => {
     const isCheapest = t.total === minTotal && minTotal < maxTotal;
@@ -656,32 +774,84 @@ function renderCart() {
       ? Math.round((1 - t.total / maxTotal) * 100)
       : null;
 
-    const storeRow = document.createElement('div');
-    storeRow.className = 'cart-store-row' + (isCheapest ? ' cheapest' : '');
+    const section = document.createElement('div');
+    section.className = 'store-section' + (isCheapest ? ' cheapest' : '');
 
-    const storeNameSpan = document.createElement('span');
-    storeNameSpan.textContent = t.store_name;
+    // Encabezado: nombre + total
+    const header = document.createElement('div');
+    header.className = 'store-section-header';
 
-    const priceSpan = document.createElement('span');
-    priceSpan.textContent = formatPrice(t.total) + ' ';
-
-    if (isCheapest || savings !== null) {
-      const badge = document.createElement('span');
-      badge.className = 'savings-badge';
-      badge.textContent = isCheapest ? 'Más barato' : `-${savings}%`;
-      priceSpan.appendChild(badge);
+    const nameEl = document.createElement('span');
+    const availCount = t.items.length;
+    nameEl.textContent = t.store_name;
+    if (availCount < totalCartItems) {
+      const avail = document.createElement('span');
+      avail.className = 'store-section-avail';
+      avail.textContent = `(${availCount}/${totalCartItems})`;
+      nameEl.appendChild(avail);
     }
 
-    storeRow.appendChild(storeNameSpan);
-    storeRow.appendChild(priceSpan);
-    totalsEl.appendChild(storeRow);
+    const totalEl = document.createElement('span');
+    totalEl.textContent = formatPrice(t.total) + ' ';
+    if (isCheapest) {
+      const badge = document.createElement('span');
+      badge.className = 'savings-badge';
+      badge.textContent = 'Más barato';
+      totalEl.appendChild(badge);
+    } else if (savings !== null) {
+      const badge = document.createElement('span');
+      badge.className = 'savings-badge';
+      badge.textContent = `-${savings}%`;
+      totalEl.appendChild(badge);
+    }
 
+    header.appendChild(nameEl);
+    header.appendChild(totalEl);
+    section.appendChild(header);
+
+    // Ítems disponibles en este supermercado
+    const itemsList = document.createElement('div');
+    itemsList.className = 'store-items';
+    t.items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'store-item-row';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'store-item-name';
+      nameSpan.title = item.name;
+      nameSpan.textContent = `${item.name} ×${item.qty}`;
+
+      const priceSpan = document.createElement('span');
+      priceSpan.className = 'store-item-price';
+      priceSpan.textContent = formatPrice(item.lineTotal);
+
+      row.appendChild(nameSpan);
+      row.appendChild(priceSpan);
+      itemsList.appendChild(row);
+    });
+
+    // Productos no disponibles en este supermercado
+    const unavailNames = cart
+      .filter(ci => !t.items.some(ti => ti.name === ci.name))
+      .map(ci => ci.name);
+    if (unavailNames.length) {
+      const unavail = document.createElement('div');
+      unavail.className = 'store-item-unavail';
+      unavail.textContent = `Sin stock: ${unavailNames.join(', ')}`;
+      itemsList.appendChild(unavail);
+    }
+
+    section.appendChild(itemsList);
+
+    // Botón comprar
     const buyBtn = document.createElement('button');
     buyBtn.className = 'buy-btn';
-    buyBtn.textContent = `Ir a comprar en ${t.store_name}`;
+    buyBtn.textContent = `Ir a comprar`;
     buyBtn.disabled = !t.urls.length;
     buyBtn.onclick = () => openStoreCart(t.store_id);
-    totalsEl.appendChild(buyBtn);
+    section.appendChild(buyBtn);
+
+    totalsEl.appendChild(section);
   });
 }
 

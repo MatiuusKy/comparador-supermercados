@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 import scraper_api
+import scraper_alvi
 import scraper_web
 
 _stores: dict = {}
@@ -39,6 +40,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[WARN] No se pudieron cargar categorías: {e}")
         _categories = []
+    # Alvi no está en carriapp — registrar manualmente
+    _stores[scraper_alvi.ALVI_STORE_ID] = {
+        "name": "Alvi",
+        "url": scraper_alvi.BASE_URL,
+        "logo": scraper_alvi.LOGO_URL,
+    }
     yield
 
 
@@ -65,7 +72,7 @@ async def search_stream(q: str):
                 data = json.dumps(enriched, ensure_ascii=False)
                 yield f"event: products\ndata: {data}\n\n"
         except (HTTPError, URLError, OSError):
-            # Fallback a Playwright
+            # Fallback a Playwright carriapp
             try:
                 for batch in scraper_web.iter_products(q):
                     enriched = _enrich_batch(batch)
@@ -74,6 +81,15 @@ async def search_stream(q: str):
             except Exception as e:
                 yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
                 return
+
+        # Fuente adicional: Alvi (scraper independiente)
+        try:
+            for batch in scraper_alvi.iter_products(q):
+                enriched = _enrich_batch(batch)
+                data = json.dumps(enriched, ensure_ascii=False)
+                yield f"event: products\ndata: {data}\n\n"
+        except Exception as e:
+            print(f"[WARN] Alvi scraper falló: {e}")
 
         yield "event: done\ndata: {}\n\n"
 
