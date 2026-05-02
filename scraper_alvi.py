@@ -6,6 +6,7 @@ como fallback, extrae datos de __NEXT_DATA__.
 """
 import json
 from typing import Iterator, List
+from urllib.parse import quote
 from playwright.sync_api import sync_playwright
 
 ALVI_STORE_ID = 10
@@ -45,7 +46,7 @@ def _to_grouped(product: dict) -> dict:
                 "price_per_unit": product.get("ppum", ""),
                 "price_per_unit_scale": "",
                 "best_promo_price": promo_price,
-                "available": 1,
+                "available": 1 if product.get("availability", "available") != "unavailable" else 0,
                 "url": product_url,
                 "image": image_url,
             }
@@ -79,7 +80,7 @@ def iter_products(query: str) -> Iterator[List[dict]]:
 
             page.on("response", on_response)
             page.goto(
-                f"{BASE_URL}/search?q={query}",
+                f"{BASE_URL}/search?q={quote(query)}",
                 wait_until="networkidle",
                 timeout=30_000,
             )
