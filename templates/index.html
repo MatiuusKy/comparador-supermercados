@@ -968,7 +968,7 @@ function renderCart() {
     buyBtn.className = 'buy-btn';
     buyBtn.textContent = `Ir a comprar`;
     buyBtn.disabled = !t.urls.length;
-    buyBtn.onclick = () => openStoreCart(t.store_id);
+    buyBtn.onclick = () => openStoreCart(t.store_id, buyBtn);
     section.appendChild(buyBtn);
 
     totalsEl.appendChild(section);
@@ -1075,7 +1075,7 @@ function openSummaryModal() {
     buyBtn.className = 'modal-buy-btn';
     buyBtn.textContent = `Ir a comprar en ${t.store_name}`;
     buyBtn.disabled = !t.urls.length;
-    buyBtn.onclick = () => openStoreCart(t.store_id);
+    buyBtn.onclick = () => openStoreCart(t.store_id, buyBtn);
     section.appendChild(buyBtn);
 
     modalBody.appendChild(section);
@@ -1090,12 +1090,40 @@ function closeSummaryModal(e) {
   }
 }
 
-function openStoreCart(storeId) {
+const _VTEX_STORE_IDS = new Set([1, 2, 10]); // Jumbo, Unimarc, Alvi
+
+async function openStoreCart(storeId, btn) {
   const cart = loadCart();
-  const urls = cart.flatMap(item =>
-    item.stores.filter(s => s.store_id === storeId && s.url).map(s => s.url)
+  const storeItems = cart.flatMap(item =>
+    item.stores
+      .filter(s => s.store_id === storeId && s.url && s.price > 0)
+      .map(s => ({ url: s.url, qty: item.qty }))
   );
-  urls.forEach(url => window.open(url, '_blank'));
+  if (!storeItems.length) return;
+
+  if (_VTEX_STORE_IDS.has(storeId)) {
+    const origText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Cargando carrito…'; }
+    try {
+      const resp = await fetch(
+        `/api/cart/build?store_id=${storeId}&items=${encodeURIComponent(JSON.stringify(storeItems))}`
+      );
+      if (resp.ok) {
+        const { checkout_url } = await resp.json();
+        if (checkout_url) {
+          window.open(checkout_url, '_blank');
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('VTEX cart build falló:', e);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = origText; }
+    }
+  }
+
+  // Fallback: abrir tabs de cada producto
+  storeItems.forEach(item => window.open(item.url, '_blank'));
 }
 </script>
 

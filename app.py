@@ -9,8 +9,10 @@ Endpoints:
 import json
 from contextlib import asynccontextmanager
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
+import httpx
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -101,6 +103,63 @@ async def search_stream(q: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# Tiendas con backend VTEX → auto-carga de carrito
+_VTEX_DOMAINS = {
+    1: "www.jumbo.cl",
+    2: "www.unimarc.cl",
+    10: "www.alvi.cl",
+}
+
+
+@app.get("/api/cart/build")
+async def cart_build(store_id: int = Query(...), items: str = Query(...)):
+    """
+    Dado store_id y lista JSON de {url, qty}, devuelve una checkout_url que,
+    al abrirla en el browser del usuario, agrega todos los productos a su
+    carrito VTEX en esa tienda.
+    """
+    domain = _VTEX_DOMAINS.get(store_id)
+    if not domain:
+        raise HTTPException(status_code=400, detail="not_vtex")
+
+    items_data: list[dict] = json.loads(items)
+    sku_qty: list[tuple[str, int]] = []
+
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        for item in items_data:
+            product_url = item.get("url", "")
+            qty = int(item.get("qty", 1))
+            if not product_url:
+                continue
+
+            # Extraer slug de URLs tipo https://domain/producto-nombre/p
+            path = urlparse(product_url).path.rstrip("/")
+            if path.endswith("/p"):
+                path = path[:-2]
+            slug = path.rsplit("/", 1)[-1]
+            if not slug:
+                continue
+
+            try:
+                resp = await client.get(
+                    f"https://{domain}/api/catalog_system/pub/products/search/{slug}",
+                    headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+                )
+                resp.raise_for_status()
+                products = resp.json()
+                if isinstance(products, list) and products and products[0].get("items"):
+                    sku_id = str(products[0]["items"][0]["itemId"])
+                    sku_qty.append((sku_id, qty))
+            except Exception as exc:
+                print(f"[WARN] VTEX skuId lookup falló para {product_url}: {exc}")
+
+    if not sku_qty:
+        raise HTTPException(status_code=422, detail="no_items_resolved")
+
+    params = "&".join(f"sku={sku}&qty={qty}&seller=1" for sku, qty in sku_qty)
+    return {"checkout_url": f"https://{domain}/checkout/cart/add?{params}&redirect=true"}
 
 
 def _enrich_batch(batch: list[dict]) -> list[dict]:
