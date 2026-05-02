@@ -6,10 +6,11 @@ Endpoints:
   GET /api/categories           → lista de categorías carriapp
   GET /api/search/stream?q=...  → SSE stream de productos
 """
+import asyncio
 import json
+import re
 from contextlib import asynccontextmanager
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -112,6 +113,38 @@ _VTEX_DOMAINS = {
     10: "www.alvi.cl",
 }
 
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "es-CL,es;q=0.9",
+}
+
+
+def _scrape_skus_playwright(urls: list[str]) -> dict[str, str]:
+    """Extrae {url: skuId} usando Playwright (para tiendas con WAF)."""
+    from playwright.sync_api import sync_playwright
+
+    results: dict[str, str] = {}
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            for url in urls:
+                try:
+                    page = browser.new_page()
+                    page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+                    m = re.search(r'"sku":"(\d+)"', page.content())
+                    if m:
+                        results[url] = m.group(1)
+                    page.close()
+                except Exception as exc:
+                    print(f"[WARN] Playwright sku lookup falló para {url}: {exc}")
+        finally:
+            browser.close()
+    return results
+
 
 @app.get("/api/cart/build")
 async def cart_build(store_id: int = Query(...), items: str = Query(...)):
@@ -125,35 +158,30 @@ async def cart_build(store_id: int = Query(...), items: str = Query(...)):
         raise HTTPException(status_code=400, detail="not_vtex")
 
     items_data: list[dict] = json.loads(items)
+    valid = [(item["url"], int(item.get("qty", 1))) for item in items_data if item.get("url")]
     sku_qty: list[tuple[str, int]] = []
 
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        for item in items_data:
-            product_url = item.get("url", "")
-            qty = int(item.get("qty", 1))
-            if not product_url:
-                continue
-
-            # Extraer slug de URLs tipo https://domain/producto-nombre/p
-            path = urlparse(product_url).path.rstrip("/")
-            if path.endswith("/p"):
-                path = path[:-2]
-            slug = path.rsplit("/", 1)[-1]
-            if not slug:
-                continue
-
+    if store_id == 1:
+        # Jumbo: httpx puede descargar la página HTML del producto
+        async def _fetch_sku(client: httpx.AsyncClient, url: str, qty: int):
             try:
-                resp = await client.get(
-                    f"https://{domain}/api/catalog_system/pub/products/search/{slug}",
-                    headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
-                )
-                resp.raise_for_status()
-                products = resp.json()
-                if isinstance(products, list) and products and products[0].get("items"):
-                    sku_id = str(products[0]["items"][0]["itemId"])
-                    sku_qty.append((sku_id, qty))
+                resp = await client.get(url, headers=_BROWSER_HEADERS)
+                m = re.search(r'"sku":"(\d+)"', resp.text)
+                return (m.group(1), qty) if m else None
             except Exception as exc:
-                print(f"[WARN] VTEX skuId lookup falló para {product_url}: {exc}")
+                print(f"[WARN] httpx sku lookup falló para {url}: {exc}")
+                return None
+
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            results = await asyncio.gather(*[_fetch_sku(client, u, q) for u, q in valid])
+        sku_qty = [r for r in results if r]
+
+    else:
+        # Unimarc, Alvi: WAF bloquea httpx → usar Playwright en hilo
+        urls = [u for u, _ in valid]
+        qty_map = {u: q for u, q in valid}
+        sku_map = await asyncio.to_thread(_scrape_skus_playwright, urls)
+        sku_qty = [(sku, qty_map[url]) for url, sku in sku_map.items()]
 
     if not sku_qty:
         raise HTTPException(status_code=422, detail="no_items_resolved")
