@@ -11,6 +11,7 @@ import json
 import re
 from contextlib import asynccontextmanager
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -56,6 +57,15 @@ app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse(request, "index.html")
@@ -67,17 +77,18 @@ async def categories():
 
 
 @app.get("/api/search/stream")
-async def search_stream(q: str):
-    def generate():
+async def search_stream(q: str = Query(..., min_length=1, max_length=200)):
+    async def generate():
         try:
-            for batch in scraper_api.iter_products(q):
+            batches = await asyncio.to_thread(lambda: list(scraper_api.iter_products(q)))
+            for batch in batches:
                 enriched = _enrich_batch(batch)
                 data = json.dumps(enriched, ensure_ascii=False)
                 yield f"event: products\ndata: {data}\n\n"
         except (HTTPError, URLError, OSError):
-            # Fallback a Playwright carriapp
             try:
-                for batch in scraper_web.iter_products(q):
+                batches = await asyncio.to_thread(lambda: list(scraper_web.iter_products(q)))
+                for batch in batches:
                     enriched = _enrich_batch(batch)
                     data = json.dumps(enriched, ensure_ascii=False)
                     yield f"event: products\ndata: {data}\n\n"
@@ -85,9 +96,9 @@ async def search_stream(q: str):
                 yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
                 return
 
-        # Fuente adicional: Alvi (scraper independiente)
         try:
-            for batch in scraper_alvi.iter_products(q):
+            alvi_batches = await asyncio.to_thread(lambda: list(scraper_alvi.iter_products(q)))
+            for batch in alvi_batches:
                 enriched = _enrich_batch(batch)
                 data = json.dumps(enriched, ensure_ascii=False)
                 yield f"event: products\ndata: {data}\n\n"
@@ -146,6 +157,16 @@ def _scrape_skus_playwright(urls: list[str]) -> dict[str, str]:
     return results
 
 
+def _is_valid_vtex_url(url: str, store_id: int) -> bool:
+    """Verifica que la URL pertenezca al dominio esperado (previene SSRF)."""
+    try:
+        parsed = urlparse(url)
+        expected = _VTEX_DOMAINS.get(store_id, "")
+        return parsed.scheme == "https" and parsed.netloc == expected
+    except Exception:
+        return False
+
+
 @app.get("/api/cart/build")
 async def cart_build(store_id: int = Query(...), items: str = Query(...)):
     """
@@ -157,8 +178,27 @@ async def cart_build(store_id: int = Query(...), items: str = Query(...)):
     if not domain:
         raise HTTPException(status_code=400, detail="not_vtex")
 
-    items_data: list[dict] = json.loads(items)
-    valid = [(item["url"], int(item.get("qty", 1))) for item in items_data if item.get("url")]
+    try:
+        items_data = json.loads(items)
+        if not isinstance(items_data, list):
+            raise HTTPException(status_code=400, detail="items debe ser un array JSON")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="JSON inválido en items")
+    valid: list[tuple[str, int]] = []
+    for item in items_data:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url", "")
+        if not isinstance(url, str) or not url:
+            continue
+        if not _is_valid_vtex_url(url, store_id):
+            print(f"[WARN] URL rechazada por validación de dominio: {url}")
+            continue
+        try:
+            qty = max(1, int(item.get("qty", 1)))
+        except (ValueError, TypeError):
+            qty = 1
+        valid.append((url, qty))
     sku_qty: list[tuple[str, int]] = []
 
     if store_id == 1:
@@ -180,7 +220,15 @@ async def cart_build(store_id: int = Query(...), items: str = Query(...)):
         # Unimarc, Alvi: WAF bloquea httpx → usar Playwright en hilo
         urls = [u for u, _ in valid]
         qty_map = {u: q for u, q in valid}
-        sku_map = await asyncio.to_thread(_scrape_skus_playwright, urls)
+        urls = urls[:20]  # cap razonable para evitar Playwright descontrolado
+        try:
+            sku_map = await asyncio.wait_for(
+                asyncio.to_thread(_scrape_skus_playwright, urls),
+                timeout=90.0,
+            )
+        except asyncio.TimeoutError:
+            print("[WARN] Playwright sku lookup excedió timeout global")
+            sku_map = {}
         sku_qty = [(sku, qty_map[url]) for url, sku in sku_map.items()]
 
     if not sku_qty:
