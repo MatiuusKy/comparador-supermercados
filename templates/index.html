@@ -557,6 +557,21 @@ function startSearch() {
   const es = new EventSource(`/api/search/stream?q=${encodeURIComponent(q)}`);
   state.eventSource = es;
 
+  const searchTimeout = setTimeout(() => {
+    es.close();
+    state.eventSource = null;
+    btn.disabled = false;
+    btn.textContent = 'Buscar';
+    if (state.products.size === 0) {
+      setStatus('La búsqueda tardó demasiado. Intenta de nuevo.', true);
+    } else {
+      setStatus(`${state.products.size} productos encontrados.`);
+      document.getElementById('filter-input').style.display = 'block';
+      document.getElementById('sort-bar').style.display = 'flex';
+      refreshPriceHighlights();
+    }
+  }, 60000);
+
   es.addEventListener('products', e => {
     const batch = JSON.parse(e.data);
     batch.forEach(product => {
@@ -583,6 +598,7 @@ function startSearch() {
   });
 
   es.addEventListener('done', () => {
+    clearTimeout(searchTimeout);
     es.close();
     setStatus(`${state.products.size} productos encontrados.`);
     btn.disabled = false;
@@ -595,6 +611,7 @@ function startSearch() {
   });
 
   es.addEventListener('error', e => {
+    clearTimeout(searchTimeout);
     if (e.data) {
       const msg = JSON.parse(e.data).message;
       setStatus(`Error: ${msg}`, true);
@@ -681,7 +698,7 @@ function appendProductRow(product, storeMap) {
   });
 
   const tdAdd = document.createElement('td');
-  tdAdd.innerHTML = `<button class="add-btn" onclick="addToCart(${product.product_id})" title="Agregar al carrito">+</button>`;
+  tdAdd.innerHTML = `<button class="add-btn" onclick="addToCart(${JSON.stringify(product.product_id)})" title="Agregar al carrito">+</button>`;
   tr.appendChild(tdAdd);
 
   tbody.appendChild(tr);
@@ -764,13 +781,15 @@ function addToCart(productId) {
       unit: product.unit,
       name: product.stores[0]?.product_name || product.slug,
       qty: 1,
-      stores: product.stores.map(s => ({
-        store_id: s.store_id,
-        store_name: s.store_name,
-        store_url: s.store_url,
-        price: s.best_promo_price ?? s.price,
-        url: s.url,
-      })),
+      stores: product.stores
+        .filter(s => s.available > 0)
+        .map(s => ({
+          store_id: s.store_id,
+          store_name: s.store_name,
+          store_url: s.store_url,
+          price: (s.best_promo_price ?? s.price) ?? 0,
+          url: s.url,
+        })),
     });
   }
   saveCart(cart);
@@ -859,10 +878,10 @@ function renderCart() {
         });
       }
       const entry = storeTotals.get(s.store_id);
-      const lineTotal = s.price * item.qty;
+      const lineTotal = (s.price || 0) * item.qty;
       entry.total += lineTotal;
       if (s.url) entry.urls.push(s.url);
-      entry.items.push({ name: item.name, qty: item.qty, price: s.price, lineTotal });
+      entry.items.push({ product_id: item.product_id, name: item.name, qty: item.qty, price: s.price, lineTotal });
     });
   });
 
@@ -890,8 +909,8 @@ function renderCart() {
 
   totalsArr.forEach(t => {
     const isCheapest = t.total === minTotal && minTotal < maxTotal;
-    const savings = maxTotal > 0 && !isCheapest
-      ? Math.round((1 - t.total / maxTotal) * 100)
+    const savings = !isCheapest && minTotal > 0
+      ? Math.round((t.total / minTotal - 1) * 100)
       : null;
 
     const section = document.createElement('div');
@@ -921,7 +940,7 @@ function renderCart() {
     } else if (savings !== null) {
       const badge = document.createElement('span');
       badge.className = 'savings-badge';
-      badge.textContent = `-${savings}%`;
+      badge.textContent = `+${savings}%`;
       totalEl.appendChild(badge);
     }
 
@@ -952,7 +971,7 @@ function renderCart() {
 
     // Productos no disponibles en este supermercado
     const unavailNames = cart
-      .filter(ci => !t.items.some(ti => ti.name === ci.name))
+      .filter(ci => !t.items.some(ti => ti.product_id === ci.product_id))
       .map(ci => ci.name);
     if (unavailNames.length) {
       const unavail = document.createElement('div');
@@ -986,10 +1005,10 @@ function openSummaryModal() {
         storeTotals.set(s.store_id, { store_name: s.store_name, total: 0, urls: [], items: [] });
       }
       const entry = storeTotals.get(s.store_id);
-      const lineTotal = s.price * item.qty;
+      const lineTotal = (s.price || 0) * item.qty;
       entry.total += lineTotal;
       if (s.url) entry.urls.push(s.url);
-      entry.items.push({ name: item.name, qty: item.qty, price: s.price, lineTotal });
+      entry.items.push({ product_id: item.product_id, name: item.name, qty: item.qty, price: s.price, lineTotal });
     });
   });
 
@@ -1006,7 +1025,7 @@ function openSummaryModal() {
 
   totalsArr.forEach(t => {
     const isCheapest = t.total === minTotal && minTotal < maxTotal;
-    const savings = maxTotal > 0 && !isCheapest ? Math.round((1 - t.total / maxTotal) * 100) : null;
+    const savings = !isCheapest && minTotal > 0 ? Math.round((t.total / minTotal - 1) * 100) : null;
 
     const section = document.createElement('div');
     section.className = 'modal-store-section' + (isCheapest ? ' cheapest' : '');
@@ -1034,7 +1053,7 @@ function openSummaryModal() {
     } else if (savings !== null) {
       const badge = document.createElement('span');
       badge.className = 'savings-badge';
-      badge.textContent = `-${savings}%`;
+      badge.textContent = `+${savings}%`;
       totalEl.appendChild(badge);
     }
 
@@ -1060,7 +1079,7 @@ function openSummaryModal() {
     });
 
     const unavailNames = cart
-      .filter(ci => !t.items.some(ti => ti.name === ci.name))
+      .filter(ci => !t.items.some(ti => ti.product_id === ci.product_id))
       .map(ci => ci.name);
     if (unavailNames.length) {
       const unavail = document.createElement('div');
@@ -1104,15 +1123,16 @@ async function openStoreCart(storeId, btn) {
   if (_VTEX_STORE_IDS.has(storeId)) {
     const origText = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = 'Cargando carrito…'; }
+    let cartBuilt = false;
     try {
       const resp = await fetch(
         `/api/cart/build?store_id=${storeId}&items=${encodeURIComponent(JSON.stringify(storeItems))}`
       );
       if (resp.ok) {
         const { checkout_url } = await resp.json();
-        if (checkout_url) {
-          window.open(checkout_url, '_blank');
-          return;
+        if (checkout_url && checkout_url.startsWith('https://')) {
+          window.open(checkout_url, '_blank', 'noopener,noreferrer');
+          cartBuilt = true;
         }
       }
     } catch (e) {
@@ -1120,10 +1140,21 @@ async function openStoreCart(storeId, btn) {
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = origText; }
     }
+    if (cartBuilt) return;
+    // Fallback con aviso
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Abriendo productos…';
+      setTimeout(() => { btn.textContent = orig; }, 3000);
+    }
   }
 
-  // Fallback: abrir tabs de cada producto
-  storeItems.forEach(item => window.open(item.url, '_blank'));
+  // Fallback: abrir tabs de cada producto (solo URLs https)
+  storeItems.forEach(item => {
+    if (item.url && item.url.startsWith('https://')) {
+      window.open(item.url, '_blank', 'noopener,noreferrer');
+    }
+  });
 }
 </script>
 
